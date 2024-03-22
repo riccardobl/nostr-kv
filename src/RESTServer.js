@@ -1,95 +1,93 @@
 import Express from 'express';
-import KVStore from './KVStore.js';
 import Cors from 'cors';
 import Https from 'https';
-export default class RestServer {
+import Yup from 'yup';
 
-    KV = undefined;
-    APP = undefined;
-    SERVER = undefined;
-    BANNER = {};
-    INDEX = "";
-    DEFAULT_RELAYS = [];
+export default class RestServer {   
+    kv = undefined;
+    app = undefined;
+    server = undefined;
+    banner = {};
+    index = "";
+    defaultRelays = [];
+    
+    constructor(kv, banner, index, sslOptions, defaultRelays) {
+        this.kv = kv;
+        this.banner = banner;
+        this.index = index;
+        this.defaultRelays = defaultRelays;
+        this.app = Express();
+        this.app.use(Express.json());
+        this.app.use(Cors());
 
-    constructor(kv, banner, index, sslOptions) {
-        this.KV = kv;
-        this.BANNER = banner;
-        this.INDEX = index;
-        this.DEFAULT_RELAYS = ["wss://nostr.rblb.it:7777"];
-        this.APP = Express();
-        this.APP.use(Express.json());
-        this.APP.use(Cors());
+        this.app.post('/api/kv/set', this.set.bind(this));
+        this.app.post('/api/kv/get', this.get.bind(this));
 
-        this.APP.post('/api/kv/set', this.set.bind(this));
-        this.APP.post('/api/kv/get', this.get.bind(this));
+        this.app.post('/api/propagation/check', this.check.bind(this));
 
-        this.APP.post('/api/propagation/check', this.check.bind(this));
-
-        this.APP.post('/api/event/create', this.eventCreate.bind(this));
-        this.APP.post('/api/event/set', this.eventSubmit.bind(this));
-        this.APP.post('/api/event/get', this.eventGet.bind(this));
+        this.app.post('/api/event/create', this.eventCreate.bind(this));
+        this.app.post('/api/event/set', this.eventSubmit.bind(this));
+        this.app.post('/api/event/get', this.eventGet.bind(this));
 
         if (sslOptions) {
-            this.SERVER = Https.createServer(sslOptions, this.APP);
+            this.server = Https.createServer(sslOptions, this.app);
         } else {
-            this.SERVER = this.APP;
+            this.server = this.app;
         }
 
 
-        if (this.INDEX) {
-            this.APP.get('/', (req, res) => {
-                res.send(this._repl(req, res, this.INDEX));
+        if (this.index) {
+            this.app.get('/', async (req, res) => {
+                res.send(await this._repl(req, res, this.index));
             });
         }
     }
 
-    _repl(req, res, v) {
+    async _repl(req, res, v) {
         v = v.replace(/%IP%/g, req.ip);
         v = v.replace(/%METHOD%/g, req.method);
+        
+        const requiredStats = v.match(/%stats\.[a-zA-Z0-9_]+%/g);
+        if (requiredStats) {
+            const stats = await this.kv.getStats();
+            for (const statKey in stats){
+                v = v.replace(new RegExp(`%stats.${statKey}%`, 'g'), stats[statKey]);                
+            }
+        }
         return v;
     };
 
     async start(port) {
-        const instance = this.SERVER.listen(port, () => {
+        const instance = this.server.listen(port, () => {
             const listeningOnPort = instance.address().port;
-            console.log('Server running on port ' + listeningOnPort);
+            console.info('Server running on port ' + listeningOnPort);
         });
     }
 
     async stop() {
-        this.SERVER.close();
+        this.server.close();
     }
 
     async addBanner(req, res, result) {
-
-        for (const key in this.BANNER) {
-            const v = this.BANNER[key];
-            result[key] = this._repl(req, res, v);
+        for (const key in this.banner) {
+            const v = this.banner[key];
+            result[key] = await this._repl(req, res, v);
         }
         return result;
     }
 
-    async catchall(req, res) {
-        const action = req.body.action;
-        if (action === "set") {
-            return this.set(req, res);
-        } else if (action === "get") {
-            return this.get(req, res);
-        } else if (action == "eventCreate") {
-            return this.eventCreate(req, res);
-        } else if (action == "eventSet") {
-            return this.eventSubmit(req, res);
-        } else {
-            res.status(400).json(await this.addBanner({ error: "Invalid action" }));
-        }
-    }
+    
 
     async eventCreate(req, res) {
-        const key = req.body.key;
-        const value = req.body.value;
-        const expireAfter = req.body.expireAfter;
+       
         try {
-            const result = await this.KV.createEvent(key, value, expireAfter);
+            const schema = Yup.object().shape({
+                key: Yup.string().required(),
+                value: Yup.string(),
+                expireAfter: Yup.number().integer().positive().default(0)
+            });
+            const { key, value, expireAfter } = await schema.validate(req.body);
+            const result = await this.kv.createEvent(key, value, expireAfter);
             res.json(result);
         } catch (e) {
             console.error(e);
@@ -98,12 +96,16 @@ export default class RestServer {
     }
 
     async eventGet(req, res) {
-        const key = req.body.key;
-        const authors = req.body.authors || ["*"];
-        const relays = req.body.relays || this.DEFAULT_RELAYS;
-        const maxHistory = req.body.maxHistory;
+       
         try {
-            const result = await this.KV.getAsEvent(key, authors, relays,  maxHistory);
+            const schema = Yup.object().shape({
+                key: Yup.string().required(),
+                authors: Yup.array().of(Yup.string()).min(1).default(["*"]),
+                relays: Yup.array().of(Yup.string()).default(this.defaultRelays),
+                maxHistory: Yup.number().integer().positive().default(10)
+            });
+            const { key, authors, relays, maxHistory } = await schema.validate(req.body);
+            const result = await this.kv.getAsEvent(key, authors, relays,  maxHistory);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
             console.error(e);
@@ -112,10 +114,14 @@ export default class RestServer {
     }
 
     async eventSubmit(req, res) {
-        const signedEvent = req.body.signedEvent;
-        const relays = req.body.relays || this.DEFAULT_RELAYS;
+      
         try {
-            const result = await this.KV.setFromEvent(signedEvent, relays);
+            const schema = Yup.object().shape({
+                signedEvent: Yup.object().required(),
+                relays: Yup.array().of(Yup.string()).default(this.defaultRelays),
+            });
+            const { signedEvent, relays } = await schema.validate(req.body);
+            const result = await this.kv.setFromEvent(signedEvent, relays);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
             console.error(e);
@@ -125,13 +131,18 @@ export default class RestServer {
 
 
     async set(req, res) {
-        const key = req.body.key;
-        const value = req.body.value;
-        const authorPrivKey = req.body.authorPrivKey;
-        const relays = req.body.relays || this.DEFAULT_RELAYS;
-        const expireAfter = req.body.expireAfter;
+      
+        
         try {
-            const result = await this.KV.set(key, value, authorPrivKey, relays, expireAfter);
+            const schema = Yup.object().shape({
+                key: Yup.string().required(),
+                value: Yup.string(),
+                authorPrivKey: Yup.string().required(),
+                relays: Yup.array().of(Yup.string()).default(this.defaultRelays),
+                expireAfter: Yup.number().integer().positive().default(0)
+            });
+            const { key, value, authorPrivKey, relays, expireAfter } = await schema.validate(req.body);
+            const result = await this.kv.set(key, value, authorPrivKey, relays, expireAfter);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
             console.error(e);
@@ -140,13 +151,17 @@ export default class RestServer {
     }
 
     async get(req, res) {
-        const key = req.body.key;
-        const authors = req.body.authors || ["*"];
-        const relays = req.body.relays || this.DEFAULT_RELAYS;
-        const maxHistory = req.body.maxHistory;
+      
 
         try {
-            const result = await this.KV.get(key, authors, relays,  maxHistory);
+            const schema = Yup.object().shape({
+                key: Yup.string().required(),
+                authors: Yup.array().of(Yup.string()).min(1).default(["*"]),
+                relays: Yup.array().of(Yup.string()).default(this.defaultRelays),
+                maxHistory: Yup.number().integer().positive().default(10)
+            });
+            const { key, authors, relays, maxHistory } = await schema.validate(req.body);
+            const result = await this.kv.get(key, authors, relays,  maxHistory);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
             console.error(e);
@@ -156,9 +171,13 @@ export default class RestServer {
 
 
     async check(req, res) {
-        const submissionIds = req.body.submissionIds;
+      
         try {
-            const result = await this.KV.checkStatus(submissionIds);
+            const schema = Yup.object().shape({
+                submissionIds: Yup.array().of(Yup.string()).required()
+            });
+            const { submissionIds } = await schema.validate(req.body);
+            const result = await this.kv.checkStatus(submissionIds);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
             console.error(e);

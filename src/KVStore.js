@@ -12,12 +12,12 @@ export default class KVStore {
     db=null;
     loopTimer =null;
     MAX_SUBMISSION_FAILURES=5;
-    CONFIG=null;
+    config=null;
+
     constructor(config,dbpath,dboptions){
         this.db = new SQLite(dbpath, dboptions);
         this.db.pragma('journal_mode = WAL');
-        this.CONFIG=config;
-
+        this.config=config;
     }
 
 
@@ -42,7 +42,6 @@ export default class KVStore {
         this._run(this._prepare('CREATE INDEX IF NOT EXISTS keys_index2 ON kvpairs(authorPubKey)'));
         this._run(this._prepare('CREATE INDEX IF NOT EXISTS keys_index3 ON kvpairs(timestamp)'));
         this._run(this._prepare('CREATE INDEX IF NOT EXISTS keys_index4 ON kvpairs(localTimestamp)'));
-
 
 
         // track active relays
@@ -166,17 +165,17 @@ export default class KVStore {
 
     async get(key, authorsPubKeys, relayUrls,  maxHistoryEntries = 10, asEvent=false) {
         await this.init();
-        if (authorsPubKeys){
-            authorsPubKeys = [...authorsPubKeys].sort();        
-        }
-        if (!authorsPubKeys||!authorsPubKeys.length) {
-            authorsPubKeys=["*"];
-        }
-        const isWildcard = authorsPubKeys.find(k=>k==="*");
-        const relays=await Promise.all(relayUrls.map(async relay=>this.getRelay(relay)));
-        const isStrictSub = !!this.CONFIG.useStrictSubscriptions;
 
-        for(const relay of relays){
+        if (authorsPubKeys)  authorsPubKeys = [...authorsPubKeys].sort();                
+        if (!authorsPubKeys||!authorsPubKeys.length)    authorsPubKeys=["*"];
+        
+        const isWildcard = authorsPubKeys.find(k=>k==="*");
+        const relays=await Promise.allSettled(relayUrls.map(async relay=>this.getRelay(relay)));
+        const isStrictSub = !!this.config.useStrictSubscriptions;
+
+        for(const relayPromise of relays){
+            if(relayPromise.status!=="fulfilled")continue;
+            const relay=relayPromise.value;
             let subs = [];
 
             for(const authorPubKey of authorsPubKeys){
@@ -217,70 +216,75 @@ export default class KVStore {
 
                     console.log("Subscribing to", s,"@",relay.url)
                     const self=this;
-                    relay.relay.subscribe([s.subEvent], {
-                        onevent(event) {
-                            try{
-                                console.log("Got event",event)
-                                if(!verifyEvent(event))throw "Invalid event";
-                                if(event.kind!==30078)throw "Invalid event kind";
-                                
-                                            
-                                let key=event.tags.find(t=>t[0]==="d");
-                                if (!key )throw "Invalid event tag (d)";
-                                key=key[1];
-                                let expiration;
-                                const expirationTag=event.tags.find(t=>t[0]==="expiration");
-                                if (expirationTag)expiration=Number(expirationTag[1])*1000;
-                                else expiration=0;
-                                if(expiration && expiration < Date.now())throw "Expired event";
-                                const timestamp=event.created_at*1000;
-                                const value=event.content;
-                                const pairId =event.id;
-                                const authorPubKey = event.pubkey;
-                                const localTimestamp = Date.now();
-                                
-                                const eventParams = {
-                                    id: pairId,
-                                    key,
-                                    value,
-                                    timestamp,
-                                    authorPubKey,
-                                    localTimestamp,
-                                    expiration: expiration,
-                                    signedEvent: JSON.stringify(event)
-                                };
-                                console.log("Received event",eventParams)
-                                const subPairId = Utils.fastId(pairId + "@" + s.id);
-                                self._transaction(() => {
-                                    // check if subscription still exists
-                                    const sub =  self._all( self._prepare('SELECT * FROM kvsub'));
-                                    console.log(sub);
-                                    if (!sub) throw "Subscription not found";
+                    try{
+                        relay.relay.subscribe([s.subEvent], {
+                            onevent(event) {
+                                try{
+                                    console.log("Got event",event)
+                                    if(!verifyEvent(event))throw "Invalid event";
+                                    if(event.kind!==30078)throw "Invalid event kind";
+                                    
+                                                
+                                    let key=event.tags.find(t=>t[0]==="d");
+                                    if (!key )throw "Invalid event tag (d)";
+                                    key=key[1];
+                                    let expiration;
+                                    const expirationTag=event.tags.find(t=>t[0]==="expiration");
+                                    if (expirationTag)expiration=Number(expirationTag[1])*1000;
+                                    else expiration=0;
+                                    if(expiration && expiration < Date.now())throw "Expired event";
+                                    const timestamp=event.created_at*1000;
+                                    const value=event.content;
+                                    const pairId =event.id;
+                                    const authorPubKey = event.pubkey;
+                                    const localTimestamp = Date.now();
+                                    
+                                    const eventParams = {
+                                        id: pairId,
+                                        key,
+                                        value,
+                                        timestamp,
+                                        authorPubKey,
+                                        localTimestamp,
+                                        expiration: expiration,
+                                        signedEvent: JSON.stringify(event)
+                                    };
+                                    console.log("Received event",eventParams)
+                                    const subPairId = Utils.fastId(pairId + "@" + s.id);
+                                    self._transaction(() => {
+                                        // check if subscription still exists
+                                        const sub =  self._all( self._prepare('SELECT * FROM kvsub'));
+                                        if (!sub) throw "Subscription not found";
 
-                                    self._run(self._prepare('INSERT OR REPLACE INTO kvpairs (id, key, value, timestamp, authorPubKey, localTimestamp, expiration,  signedEvent) VALUES (:id, :key, :value, :timestamp, :authorPubKey, :localTimestamp, :expiration, :signedEvent)'),eventParams);
-                                    self._run(self._prepare('INSERT OR REPLACE INTO kvpairsXsub (subPairId, pairId, subscriptionId) VALUES (:subPairId, :pairId, :subscriptionId)'), {
-                                        subPairId,
-                                        pairId,
-                                        subscriptionId: s.id
-                                    });                                 
-                                });
-                                
-                            }catch(e){
-                                console.error("Can't process event",e);
+                                        self._run(self._prepare('INSERT OR REPLACE INTO kvpairs (id, key, value, timestamp, authorPubKey, localTimestamp, expiration,  signedEvent) VALUES (:id, :key, :value, :timestamp, :authorPubKey, :localTimestamp, :expiration, :signedEvent)'),eventParams);
+                                        self._run(self._prepare('INSERT OR REPLACE INTO kvpairsXsub (subPairId, pairId, subscriptionId) VALUES (:subPairId, :pairId, :subscriptionId)'), {
+                                            subPairId,
+                                            pairId,
+                                            subscriptionId: s.id
+                                        });                                 
+                                    });
+                                    
+                                }catch(e){
+                                    console.error("Can't process event",e);
+                                }
+                            },
+                            oneose() {
+                                clearTimeout(timeoutTimer);
+                                resolve();
                             }
-                        },
-                        oneose() {
-                            clearTimeout(timeoutTimer);
-                            resolve();
-                        }
-                    });
-                })
-                .then(() => s);
+                        });
+                    }catch(e){
+                        clearTimeout(timeoutTimer);
+                        reject(e);
+                    }
+                }).then(() => s);
             });
 
-            subs = await Promise.all(subs);
+            subs = await Promise.allSettled(subs);
             for(const sub of subs){
-                this.activeSubscriptions[sub.id] = sub;
+                if(sub.status==="fulfilled"){
+                    this.activeSubscriptions[sub.id] = sub.value;
+                }
             }
         }
       
@@ -306,7 +310,6 @@ export default class KVStore {
         query= this._prepare(query);
         
         const entries=  this._all(query, params);     
-        console.log(entries);
         
         if (!asEvent){
             const out={
@@ -402,12 +405,11 @@ export default class KVStore {
         if (!signedEvent.tags.find(t => t[0] === "d")) throw "Invalid event tag (d)";
         const key=signedEvent.tags.find(t => t[0] === "d")[1];
 
-      
-
         const expirationTag=signedEvent.tags.find(t => t[0] === "expiration");
         let expiration;
         if (expirationTag)expiration=Number(expirationTag[1])*1000;
         else expiration=0;
+
         const value=signedEvent.content;
         const pubKey=signedEvent.pubkey;
         const timestamp=Number(signedEvent.created_at)*1000;
@@ -454,8 +456,7 @@ export default class KVStore {
     }
 
     async set(key, value, privKey, relays, expireAfter){
-        await this.init();
-      
+        await this.init();      
         try{
             if(!privKey){
                 privKey=generateSecretKey();
@@ -510,7 +511,6 @@ export default class KVStore {
                 }
                 return submission;
             }));
-            console.log(res);  
         }catch(e){
             console.error(e);
         }     
@@ -590,6 +590,15 @@ export default class KVStore {
     }
 
 
+    async getStats(){
+        await this.init();
+        const stats={};
+        stats.cachedKVs = this._get( this._prepare('SELECT COUNT(*) as count FROM kvpairs'))['count'];
+        stats.activeRelays = this._get( this._prepare('SELECT COUNT(*) as count FROM relays'))['count'];
+        stats.activeSubscriptions = this._get( this._prepare('SELECT COUNT(*) as count FROM kvsub'))['count'];
+        stats.pendingEvents = this._get( this._prepare('SELECT COUNT(*) as count FROM eventSubmissionQueue'))['count'];
+        return stats;
+    }
 
 
     // slite wrapper stuff

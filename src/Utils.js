@@ -1,4 +1,3 @@
-import MurmurHash3 from 'murmurhash-v3';
 
 export default class Utils {
     static fastId(value) {

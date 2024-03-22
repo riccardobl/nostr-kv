@@ -120,7 +120,7 @@ describe("KV", () => {
         expect(readRes.value).toEqual(value);
 
         // wait 2 second
-        console.log("Wait...");
+        // console.log("Wait...");
         await new Promise((resolve) => setTimeout(resolve, 6000));
 
         let readRes2 = await db.get(key, undefined, relays);
