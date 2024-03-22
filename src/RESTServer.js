@@ -90,6 +90,7 @@ export default class RestServer {
             const result = await this.kv.createEvent(key, value, expireAfter);
             res.json(result);
         } catch (e) {
+            console.log("Request",req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
@@ -108,6 +109,7 @@ export default class RestServer {
             const result = await this.kv.getAsEvent(key, authors, relays,  maxHistory);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
+            console.log("Request", req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
@@ -124,6 +126,7 @@ export default class RestServer {
             const result = await this.kv.setFromEvent(signedEvent, relays);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
+            console.log("Request", req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
@@ -145,6 +148,7 @@ export default class RestServer {
             const result = await this.kv.set(key, value, authorPrivKey, relays, expireAfter);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
+            console.log("Request", req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
@@ -164,6 +168,7 @@ export default class RestServer {
             const result = await this.kv.get(key, authors, relays,  maxHistory);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
+            console.log("Request", req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
@@ -180,6 +185,7 @@ export default class RestServer {
             const result = await this.kv.checkStatus(submissionIds);
             res.json(await this.addBanner(req, res, result));
         } catch (e) {
+            console.log("Request", req);
             console.error(e);
             res.status(500).json(await this.addBanner(req, res, { error: "" + e }));
         }
