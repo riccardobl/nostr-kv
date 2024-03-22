@@ -17,7 +17,8 @@ export default class RestServer {
         this.index = index;
         this.defaultRelays = defaultRelays;
         this.app = Express();
-        this.app.use(Express.json());
+        this.app.use(Express.json({ type: '*/*' }));
+
         this.app.use(Cors());
 
         this.app.post('/api/kv/set', this.set.bind(this));
