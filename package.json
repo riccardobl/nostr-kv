@@ -7,8 +7,8 @@
     "test": "jasmine",
     "start": "node ./src/main.js"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "rblb",
+  "license": "BSD-3-Clause",
   "dependencies": {
     "better-sqlite3": "^9.4.3",
     "cors": "^2.8.5",
